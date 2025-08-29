@@ -1,0 +1,415 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { query } from '@/lib/database';
+import { getTokenFromRequest, verifyToken } from '@/lib/auth';
+
+/**
+ * @swagger
+ * /api/sync/devices:
+ *   post:
+ *     summary: 외부 API로부터 디바이스 데이터 동기화
+ *     tags: [Sync]
+ *     security:
+ *       - bearerAuth: []
+ *       - apiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - apiConnectionId
+ *             properties:
+ *               apiConnectionId:
+ *                 type: string
+ *                 format: uuid
+ *                 description: API 연결 ID
+ *               isAutoSync:
+ *                 type: boolean
+ *                 description: 자동 동기화 여부
+ *     responses:
+ *       200:
+ *         description: 동기화 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 stats:
+ *                   type: object
+ *                   properties:
+ *                     recordsProcessed:
+ *                       type: integer
+ *                     recordsAdded:
+ *                       type: integer
+ *                     recordsUpdated:
+ *                       type: integer
+ *                     recordsDeactivated:
+ *                       type: integer
+ *                     recordsSkipped:
+ *                       type: integer
+ *                 warnings:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *       400:
+ *         description: API connection ID is required
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       404:
+ *         description: API connection not found
+ *       500:
+ *         $ref: '#/components/responses/InternalServerError'
+ */
+export async function POST(request: NextRequest) {
+  try {
+    // 시스템 자동 동기화인 경우
+    const systemUser = request.headers.get('X-System-User');
+    let userId = null;
+    
+    if (systemUser === 'auto-sync') {
+      // 시스템 사용자 ID 사용
+      const systemUserResult = await query(
+        `SELECT id FROM users WHERE email = 'admin@guardianx.com' LIMIT 1`
+      );
+      if (systemUserResult.rows.length > 0) {
+        userId = systemUserResult.rows[0].id;
+      }
+    } else {
+      // 일반 사용자 인증
+      const token = getTokenFromRequest(request);
+      if (!token) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+
+      const user = await verifyToken(token);
+      if (!user) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+      userId = user.userId;
+    }
+
+    if (!userId) {
+      return NextResponse.json({ error: 'User not found' }, { status: 401 });
+    }
+
+    const { apiConnectionId, isAutoSync } = await request.json();
+
+    if (!apiConnectionId) {
+      return NextResponse.json(
+        { error: 'API connection ID is required' },
+        { status: 400 }
+      );
+    }
+
+    // Get API connection details
+    const connectionResult = await query(
+      `SELECT * FROM api_connections WHERE id = $1 AND is_active = true`,
+      [apiConnectionId]
+    );
+
+    if (connectionResult.rows.length === 0) {
+      return NextResponse.json(
+        { error: 'API connection not found' },
+        { status: 404 }
+      );
+    }
+
+    const apiConnection = connectionResult.rows[0];
+
+    // Create sync history record
+    const executionType = systemUser === 'auto-sync' ? 'auto' : 'manual';
+    const syncHistoryResult = await query(
+      `INSERT INTO sync_history (api_connection_id, initiated_by, status, execution_type)
+       VALUES ($1, $2, 'running', $3)
+       RETURNING id`,
+      [apiConnectionId, userId, executionType]
+    );
+
+    const syncHistoryId = syncHistoryResult.rows[0].id;
+
+    try {
+      let apiData: any[] = [];
+      
+      // Check connection type and fetch data accordingly
+      if (apiConnection.connection_type === 'google_sheets') {
+        // Fetch data from Google Sheets
+        const sheetsResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/google-sheets/fetch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            spreadsheetUrl: apiConnection.api_url,
+            sheetName: apiConnection.sheet_name || 'Sheet1',
+            range: apiConnection.range_notation || 'A:Z'
+          }),
+        });
+        
+        if (!sheetsResponse.ok) {
+          const error = await sheetsResponse.json();
+          throw new Error(`Google Sheets fetch failed: ${error.details || error.error}`);
+        }
+        
+        const sheetsData = await sheetsResponse.json();
+        apiData = sheetsData.data || [];
+      } else {
+        // Fetch data from regular API
+        const response = await fetch(apiConnection.api_url);
+        if (!response.ok) {
+          throw new Error(`API request failed: ${response.status}`);
+        }
+
+        apiData = await response.json();
+        if (!Array.isArray(apiData)) {
+          throw new Error('API response is not an array');
+        }
+      }
+
+      const fieldMappings = apiConnection.field_mappings || {};
+      let recordsProcessed = 0;
+      let recordsAdded = 0;
+      let recordsUpdated = 0;
+      let recordsDeactivated = 0;
+      let recordsSkipped = 0;
+      const skippedReasons: string[] = [];
+
+      // Get existing devices by name to check for updates (not for deactivation)
+      const existingDevicesResult = await query(
+        `SELECT id, name, status, is_active 
+         FROM devices 
+         WHERE is_active = true`,
+        []
+      );
+      
+      const existingDevices = new Map(
+        existingDevicesResult.rows.map(device => [device.name, { 
+          id: device.id, 
+          status: device.status, 
+          is_active: device.is_active
+        }])
+      );
+
+      // Process each API record
+      for (const apiRecord of apiData) {
+        recordsProcessed++;
+
+        // Map API fields to database fields
+        const mappedData: any = {};
+        for (const [dbField, apiField] of Object.entries(fieldMappings)) {
+          if (apiField && apiRecord[apiField as string] !== undefined) {
+            mappedData[dbField] = apiRecord[apiField as string];
+          }
+        }
+
+        console.log('Processing device record:', { 
+          original: apiRecord, 
+          mapped: mappedData
+        });
+
+        // Ensure required fields
+        if (!mappedData.name) {
+          console.warn('Skipping device record without name:', apiRecord);
+          recordsSkipped++;
+          if (!skippedReasons.includes('필수 필드 누락 (name)')) {
+            skippedReasons.push('필수 필드 누락 (name)');
+          }
+          continue;
+        }
+
+
+        // Check if device exists
+        const existingDevice = existingDevices.get(mappedData.name);
+
+        if (existingDevice) {
+          // Update existing device (restore if deactivated)
+          const wasInactive = !existingDevice.is_active;
+          
+          // Build dynamic UPDATE query - only update fields that have mappings
+          const updateFields: string[] = [];
+          const updateValues: any[] = [];
+          let paramIndex = 1;
+
+          // Always update status to active
+          updateFields.push('status = $' + paramIndex++);
+          updateValues.push('active');
+          updateFields.push('updated_at = CURRENT_TIMESTAMP');
+          updateFields.push('is_active = true');
+
+          // Only update fields that have mappings in the API response and exist in DB
+          if (mappedData.hasOwnProperty('device_type')) {
+            updateFields.push(`device_type = $${paramIndex++}`);
+            updateValues.push(mappedData.device_type || 'server');
+          }
+          if (mappedData.hasOwnProperty('manufacturer')) {
+            updateFields.push(`manufacturer = $${paramIndex++}`);
+            updateValues.push(mappedData.manufacturer || '');
+          }
+          if (mappedData.hasOwnProperty('model')) {
+            updateFields.push(`model = $${paramIndex++}`);
+            updateValues.push(mappedData.model || '');
+          }
+          if (mappedData.hasOwnProperty('serial_number')) {
+            updateFields.push(`serial_number = $${paramIndex++}`);
+            updateValues.push(mappedData.serial_number || '');
+          }
+          if (mappedData.hasOwnProperty('description')) {
+            updateFields.push(`description = $${paramIndex++}`);
+            updateValues.push(mappedData.description || '');
+          }
+
+          // Add the device ID as the final parameter
+          updateValues.push(existingDevice.id);
+
+          const updateQuery = `UPDATE devices SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`;
+          
+          await query(updateQuery, updateValues);
+          
+          if (wasInactive) {
+            console.log(`Restored device ${mappedData.name} - found in API again`);
+            recordsAdded++;
+          } else {
+            recordsUpdated++;
+          }
+        } else {
+          // Insert new device - only include fields that have mappings, use defaults for others
+          const insertFields = ['name', 'status', 'created_by'];
+          const insertValues = [mappedData.name, 'active', userId];
+          const placeholders = ['$1', '$2', '$3'];
+          let paramIndex = 4;
+
+          // Only include fields that have mappings in the API response and exist in DB
+          if (mappedData.hasOwnProperty('device_type')) {
+            insertFields.push('device_type');
+            insertValues.push(mappedData.device_type || 'server');
+            placeholders.push(`$${paramIndex++}`);
+          } else {
+            // Default device_type if not provided
+            insertFields.push('device_type');
+            insertValues.push('server');
+            placeholders.push(`$${paramIndex++}`);
+          }
+          if (mappedData.hasOwnProperty('manufacturer')) {
+            insertFields.push('manufacturer');
+            insertValues.push(mappedData.manufacturer || '');
+            placeholders.push(`$${paramIndex++}`);
+          }
+          if (mappedData.hasOwnProperty('model')) {
+            insertFields.push('model');
+            insertValues.push(mappedData.model || '');
+            placeholders.push(`$${paramIndex++}`);
+          }
+          if (mappedData.hasOwnProperty('serial_number')) {
+            insertFields.push('serial_number');
+            insertValues.push(mappedData.serial_number || '');
+            placeholders.push(`$${paramIndex++}`);
+          }
+          if (mappedData.hasOwnProperty('description')) {
+            insertFields.push('description');
+            insertValues.push(mappedData.description || '');
+            placeholders.push(`$${paramIndex++}`);
+          }
+
+          const insertQuery = `INSERT INTO devices (${insertFields.join(', ')}) VALUES (${placeholders.join(', ')})`;
+          
+          await query(insertQuery, insertValues);
+          recordsAdded++;
+        }
+      }
+
+      // Note: We do NOT deactivate devices that are not in the API response
+      // because we want to preserve manually added devices.
+      // Only devices that were created/managed by THIS API connection should be affected.
+
+      // Update sync history with success
+      await query(
+        `UPDATE sync_history 
+         SET status = 'completed', 
+             sync_completed_at = CURRENT_TIMESTAMP,
+             records_processed = $1,
+             records_added = $2,
+             records_updated = $3,
+             records_deactivated = $4,
+             sync_details = $5
+         WHERE id = $6`,
+        [
+          recordsProcessed,
+          recordsAdded,
+          recordsUpdated,
+          recordsDeactivated,
+          JSON.stringify({ total_api_records: apiData.length }),
+          syncHistoryId
+        ]
+      );
+
+      // Update API connection last sync info
+      await query(
+        `UPDATE api_connections 
+         SET last_sync = CURRENT_TIMESTAMP,
+             last_sync_status = 'success',
+             last_sync_message = $1
+         WHERE id = $2`,
+        [
+          `성공적으로 동기화됨: ${recordsAdded}개 추가, ${recordsUpdated}개 업데이트, ${recordsDeactivated}개 비활성화`,
+          apiConnectionId
+        ]
+      );
+
+      // Build detailed message
+      let detailedMessage = '디바이스 동기화가 완료되었습니다.';
+      if (recordsSkipped > 0) {
+        detailedMessage += ` (${recordsSkipped}개 레코드 건너뜀: ${skippedReasons.join(', ')})`;
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: detailedMessage,
+        stats: {
+          recordsProcessed,
+          recordsAdded,
+          recordsUpdated,
+          recordsDeactivated,
+          recordsSkipped
+        },
+        warnings: recordsSkipped > 0 ? skippedReasons : []
+      });
+
+    } catch (syncError) {
+      // Update sync history with error
+      await query(
+        `UPDATE sync_history 
+         SET status = 'failed', 
+             sync_completed_at = CURRENT_TIMESTAMP,
+             error_message = $1
+         WHERE id = $2`,
+        [syncError instanceof Error ? syncError.message : 'Unknown error', syncHistoryId]
+      );
+
+      // Update API connection last sync info
+      await query(
+        `UPDATE api_connections 
+         SET last_sync = CURRENT_TIMESTAMP,
+             last_sync_status = 'error',
+             last_sync_message = $1
+         WHERE id = $2`,
+        [syncError instanceof Error ? syncError.message : 'Sync failed', apiConnectionId]
+      );
+
+      throw syncError;
+    }
+
+  } catch (error) {
+    console.error('Device sync error:', error);
+    return NextResponse.json(
+      { 
+        error: '디바이스 동기화 중 오류가 발생했습니다.',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      },
+      { status: 500 }
+    );
+  }
+}

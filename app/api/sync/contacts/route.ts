@@ -1,0 +1,358 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { query } from '@/lib/database';
+import { getTokenFromRequest, verifyToken } from '@/lib/auth';
+
+export async function POST(request: NextRequest) {
+  try {
+    // 시스템 자동 동기화인 경우
+    const systemUser = request.headers.get('X-System-User');
+    let userId = null;
+    
+    if (systemUser === 'auto-sync') {
+      // 시스템 사용자 ID 사용
+      const systemUserResult = await query(
+        `SELECT id FROM users WHERE email = 'admin@guardianx.com' LIMIT 1`
+      );
+      if (systemUserResult.rows.length > 0) {
+        userId = systemUserResult.rows[0].id;
+      }
+    } else {
+      // 일반 사용자 인증
+      const token = getTokenFromRequest(request);
+      if (!token) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+
+      const user = await verifyToken(token);
+      if (!user) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+      userId = user.userId;
+    }
+
+    if (!userId) {
+      return NextResponse.json({ error: 'User not found' }, { status: 401 });
+    }
+
+    const { apiConnectionId, isAutoSync } = await request.json();
+
+    if (!apiConnectionId) {
+      return NextResponse.json(
+        { error: 'API connection ID is required' },
+        { status: 400 }
+      );
+    }
+
+    // Get API connection details
+    const connectionResult = await query(
+      `SELECT * FROM api_connections WHERE id = $1 AND is_active = true`,
+      [apiConnectionId]
+    );
+
+    if (connectionResult.rows.length === 0) {
+      return NextResponse.json(
+        { error: 'API connection not found' },
+        { status: 404 }
+      );
+    }
+
+    const apiConnection = connectionResult.rows[0];
+
+    // Get tenant_id from the API connection
+    const tenantId = apiConnection.tenant_id;
+
+    // Create sync history record
+    const executionType = systemUser === 'auto-sync' ? 'auto' : 'manual';
+    const syncHistoryResult = await query(
+      `INSERT INTO sync_history (api_connection_id, initiated_by, status, execution_type)
+       VALUES ($1, $2, 'running', $3)
+       RETURNING id`,
+      [apiConnectionId, userId, executionType]
+    );
+
+    const syncHistoryId = syncHistoryResult.rows[0].id;
+
+    try {
+      let apiData: any[] = [];
+      
+      // Check connection type and fetch data accordingly
+      if (apiConnection.connection_type === 'google_sheets') {
+        // Fetch data from Google Sheets
+        const sheetsResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/google-sheets/fetch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            spreadsheetUrl: apiConnection.api_url,
+            sheetName: apiConnection.sheet_name || 'Sheet1',
+            range: apiConnection.range_notation || 'A:Z'
+          }),
+        });
+        
+        if (!sheetsResponse.ok) {
+          const error = await sheetsResponse.json();
+          throw new Error(`Google Sheets fetch failed: ${error.details || error.error}`);
+        }
+        
+        const sheetsData = await sheetsResponse.json();
+        apiData = sheetsData.data || [];
+      } else {
+        // Fetch data from regular API
+        const response = await fetch(apiConnection.api_url);
+        if (!response.ok) {
+          throw new Error(`API request failed: ${response.status}`);
+        }
+
+        apiData = await response.json();
+        if (!Array.isArray(apiData)) {
+          throw new Error('API response is not an array');
+        }
+      }
+
+      const fieldMappings = apiConnection.field_mappings || {};
+      let recordsProcessed = 0;
+      let recordsAdded = 0;
+      let recordsUpdated = 0;
+
+      // Get existing contacts by email to check for updates (not for deactivation)
+      const existingContactsResult = await query(
+        `SELECT id, email, name, is_active 
+         FROM contacts 
+         WHERE is_active = true`,
+        []
+      );
+      
+      const existingContacts = new Map(
+        existingContactsResult.rows.map(contact => [contact.email, { 
+          id: contact.id, 
+          name: contact.name,
+          is_active: contact.is_active
+        }])
+      );
+
+      // Process each API record
+      for (const apiRecord of apiData) {
+        recordsProcessed++;
+
+        // Map API fields to database fields
+        const mappedData: any = {};
+        for (const [dbField, apiField] of Object.entries(fieldMappings)) {
+          if (apiField && apiRecord[apiField as string] !== undefined) {
+            mappedData[dbField] = apiRecord[apiField as string];
+          }
+        }
+
+        console.log('Processing contact record:', { 
+          original: apiRecord, 
+          mapped: mappedData
+        });
+
+        // Ensure required fields (email is the unique identifier)
+        if (!mappedData.email) {
+          console.warn('Skipping contact record without email:', apiRecord);
+          continue;
+        }
+
+        // Check if contact exists
+        const existingContact = existingContacts.get(mappedData.email);
+
+        if (existingContact) {
+          // Update existing contact
+          const wasInactive = !existingContact.is_active;
+          
+          // Build dynamic UPDATE query - only update fields that have mappings
+          const updateFields: string[] = [];
+          const updateValues: any[] = [];
+          let paramIndex = 1;
+
+          // Always update to active
+          updateFields.push('updated_at = CURRENT_TIMESTAMP');
+          updateFields.push('is_active = true');
+
+          // Only update fields that have mappings in the API response and exist in DB
+          if (mappedData.hasOwnProperty('name')) {
+            updateFields.push(`name = $${paramIndex++}`);
+            updateValues.push(mappedData.name || '');
+          }
+          if (mappedData.hasOwnProperty('phone')) {
+            updateFields.push(`phone = $${paramIndex++}`);
+            updateValues.push(mappedData.phone || '');
+          }
+          if (mappedData.hasOwnProperty('mobile')) {
+            updateFields.push(`mobile = $${paramIndex++}`);
+            updateValues.push(mappedData.mobile || '');
+          }
+          if (mappedData.hasOwnProperty('title')) {
+            updateFields.push(`title = $${paramIndex++}`);
+            updateValues.push(mappedData.title || '');
+          }
+          if (mappedData.hasOwnProperty('department')) {
+            updateFields.push(`department = $${paramIndex++}`);
+            updateValues.push(mappedData.department || '');
+          }
+          if (mappedData.hasOwnProperty('office_location')) {
+            updateFields.push(`office_location = $${paramIndex++}`);
+            updateValues.push(mappedData.office_location || '');
+          }
+          if (mappedData.hasOwnProperty('responsibilities') && Array.isArray(mappedData.responsibilities)) {
+            updateFields.push(`responsibilities = $${paramIndex++}`);
+            updateValues.push(mappedData.responsibilities);
+          }
+
+          // Add the contact ID as the final parameter
+          updateValues.push(existingContact.id);
+
+          const updateQuery = `UPDATE contacts SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`;
+          
+          await query(updateQuery, updateValues);
+          
+          if (wasInactive) {
+            console.log(`Restored contact ${mappedData.email} - found in API again`);
+            recordsAdded++;
+          } else {
+            recordsUpdated++;
+          }
+        } else {
+          // Insert new contact - only include fields that have mappings and exist in DB
+          const insertFields = ['email', 'tenant_id', 'is_active', 'created_by'];
+          const insertValues = [mappedData.email, tenantId, true, userId];
+          const placeholders = ['$1', '$2', '$3', '$4'];
+          let paramIndex = 5;
+
+          // Only include fields that have mappings in the API response and exist in DB
+          if (mappedData.hasOwnProperty('name')) {
+            insertFields.push('name');
+            insertValues.push(mappedData.name || '');
+            placeholders.push(`$${paramIndex++}`);
+          }
+          if (mappedData.hasOwnProperty('phone')) {
+            insertFields.push('phone');
+            insertValues.push(mappedData.phone || '');
+            placeholders.push(`$${paramIndex++}`);
+          }
+          if (mappedData.hasOwnProperty('mobile')) {
+            insertFields.push('mobile');
+            insertValues.push(mappedData.mobile || '');
+            placeholders.push(`$${paramIndex++}`);
+          }
+          if (mappedData.hasOwnProperty('title')) {
+            insertFields.push('title');
+            insertValues.push(mappedData.title || '');
+            placeholders.push(`$${paramIndex++}`);
+          }
+          if (mappedData.hasOwnProperty('department')) {
+            insertFields.push('department');
+            insertValues.push(mappedData.department || '');
+            placeholders.push(`$${paramIndex++}`);
+          }
+          if (mappedData.hasOwnProperty('office_location')) {
+            insertFields.push('office_location');
+            insertValues.push(mappedData.office_location || '');
+            placeholders.push(`$${paramIndex++}`);
+          }
+          if (mappedData.hasOwnProperty('responsibilities') && Array.isArray(mappedData.responsibilities)) {
+            insertFields.push('responsibilities');
+            insertValues.push(mappedData.responsibilities);
+            placeholders.push(`$${paramIndex++}`);
+          }
+
+          const insertQuery = `INSERT INTO contacts (${insertFields.join(', ')}) VALUES (${placeholders.join(', ')})`;
+          
+          await query(insertQuery, insertValues);
+          recordsAdded++;
+        }
+      }
+
+      // Note: We do NOT deactivate contacts that are not in the API response
+      // because we want to preserve manually added contacts.
+      // Only contacts that were created/managed by THIS API connection should be affected.
+
+      // Update sync history with success
+      await query(
+        `UPDATE sync_history 
+         SET status = 'completed', 
+             sync_completed_at = CURRENT_TIMESTAMP,
+             records_processed = $1,
+             records_added = $2,
+             records_updated = $3,
+             records_deactivated = $4,
+             sync_details = $5
+         WHERE id = $6`,
+        [
+          recordsProcessed,
+          recordsAdded,
+          recordsUpdated,
+          0, // No deactivation
+          JSON.stringify({ total_api_records: apiData.length }),
+          syncHistoryId
+        ]
+      );
+
+      // Update API connection last sync info
+      await query(
+        `UPDATE api_connections 
+         SET last_sync = CURRENT_TIMESTAMP,
+             last_sync_status = 'success',
+             last_sync_message = $1
+         WHERE id = $2`,
+        [
+          `성공적으로 동기화됨: ${recordsAdded}개 추가, ${recordsUpdated}개 업데이트`,
+          apiConnectionId
+        ]
+      );
+
+      return NextResponse.json({
+        success: true,
+        message: '담당자 동기화가 완료되었습니다.',
+        stats: {
+          processed: recordsProcessed,
+          added: recordsAdded,
+          updated: recordsUpdated,
+          deactivated: 0
+        }
+      });
+
+    } catch (error) {
+      console.error('Contact sync error:', error);
+      
+      // Update sync history with failure
+      await query(
+        `UPDATE sync_history 
+         SET status = 'failed', 
+             sync_completed_at = CURRENT_TIMESTAMP,
+             error_message = $1
+         WHERE id = $2`,
+        [
+          error instanceof Error ? error.message : 'Unknown error',
+          syncHistoryId
+        ]
+      );
+
+      // Update API connection with error status
+      await query(
+        `UPDATE api_connections 
+         SET last_sync = CURRENT_TIMESTAMP,
+             last_sync_status = 'error',
+             last_sync_message = $1
+         WHERE id = $2`,
+        [
+          error instanceof Error ? error.message : 'Unknown error',
+          apiConnectionId
+        ]
+      );
+
+      throw error;
+    }
+
+  } catch (error) {
+    console.error('Contact sync error:', error);
+    return NextResponse.json(
+      { 
+        error: '담당자 동기화 중 오류가 발생했습니다.',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      },
+      { status: 500 }
+    );
+  }
+}
