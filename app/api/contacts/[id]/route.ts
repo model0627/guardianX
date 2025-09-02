@@ -347,7 +347,7 @@ export async function DELETE(
 
     // 담당자 정보 조회 (삭제 전 반환용)
     const getQuery = `
-      SELECT id, name, email, phone, role, status, notes, created_at, updated_at
+      SELECT id, name, email, phone, mobile, title, department, office_location, created_at, updated_at
       FROM contacts
       WHERE id = $1 AND tenant_id = $2
     `;

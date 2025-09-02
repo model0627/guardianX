@@ -398,18 +398,6 @@ export default function Sidebar({ sidebarOpen, setSidebarOpen }: SidebarProps) {
             <BarChart3 className={`w-5 h-5 ${pathname === '/dashboard' ? 'text-orange-600' : 'text-gray-400'}`} />
             <span className="truncate flex-1 text-left">메인 대시보드</span>
           </Link>
-          
-          <Link
-            href="/tenant-setup"
-            className={`w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg transition-colors mt-2 ${
-              pathname === '/tenant-setup' 
-                ? 'bg-orange-100 text-orange-700' 
-                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-800'
-            }`}
-          >
-            <Building2 className={`w-5 h-5 ${pathname === '/tenant-setup' ? 'text-orange-600' : 'text-gray-400'}`} />
-            <span className="truncate flex-1 text-left">테넌트 설정</span>
-          </Link>
         </div>
 
         {/* IPAM 관리 메뉴 (드롭다운) */}

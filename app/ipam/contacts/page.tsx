@@ -21,6 +21,7 @@ import {
   Link
 } from 'lucide-react';
 import ContactFieldMappingModal from './components/ContactFieldMappingModal';
+import DeleteConfirmDialog from './components/DeleteConfirmDialog';
 import AutoSyncToggle from '@/app/ipam/devices/components/AutoSyncToggle';
 import SyncHistoryModal from '@/app/ipam/devices/components/SyncHistoryModal';
 import { useToast } from '@/hooks/useToast';
@@ -102,6 +103,11 @@ const ContactsPage = () => {
   const [showSyncHistoryModal, setShowSyncHistoryModal] = useState(false);
   const [selectedHistoryConnection, setSelectedHistoryConnection] = useState<ApiConnection | null>(null);
   const [syncingConnectionId, setSyncingConnectionId] = useState<string | null>(null);
+  
+  // Delete dialog states
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deletingContact, setDeletingContact] = useState<Contact | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     // 페이지 타이틀 설정
@@ -253,25 +259,36 @@ const ContactsPage = () => {
     setShowFormModal(true);
   };
 
-  const handleDeleteContact = async (contact: Contact) => {
-    if (window.confirm(`${contact.name} 담당자를 삭제하시겠습니까?`)) {
-      try {
-        const response = await fetch(`/api/contacts/${contact.id}`, {
-          method: 'DELETE',
-          credentials: 'include'
-        });
-        
-        if (!response.ok) {
-          const data = await response.json();
-          throw new Error(data.error || 'Failed to delete contact');
-        }
-        
-        // Remove from local state
-        setContacts(contacts.filter(c => c.id !== contact.id));
-      } catch (error) {
-        console.error('Failed to delete contact:', error);
-        alert('담당자 삭제에 실패했습니다.');
+  const handleDeleteContact = (contact: Contact) => {
+    setDeletingContact(contact);
+    setShowDeleteDialog(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!deletingContact) return;
+
+    try {
+      setIsDeleting(true);
+      const response = await fetch(`/api/contacts/${deletingContact.id}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
+      
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to delete contact');
       }
+      
+      // Remove from local state
+      setContacts(contacts.filter(c => c.id !== deletingContact.id));
+      setShowDeleteDialog(false);
+      setDeletingContact(null);
+      addToast('담당자가 성공적으로 삭제되었습니다.', 'success');
+    } catch (error) {
+      console.error('Failed to delete contact:', error);
+      addToast('담당자 삭제에 실패했습니다.', 'error');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -697,45 +714,18 @@ const ContactsPage = () => {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    역할
+                    활성 상태
                   </label>
                   <select
-                    value={formData.role}
-                    onChange={(e) => setFormData({ ...formData, role: e.target.value as 'primary' | 'backup' | 'viewer' })}
+                    value={formData.is_active ? 'true' : 'false'}
+                    onChange={(e) => setFormData({ ...formData, is_active: e.target.value === 'true' })}
                     className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   >
-                    <option value="primary">주 담당자</option>
-                    <option value="backup">부 담당자</option>
-                    <option value="viewer">조회자</option>
+                    <option value="true">활성</option>
+                    <option value="false">비활성</option>
                   </select>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    상태
-                  </label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value as 'active' | 'inactive' })}
-                    className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  >
-                    <option value="active">활성</option>
-                    <option value="inactive">비활성</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    메모
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={formData.notes}
-                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                    className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="담당 업무나 기타 정보를 입력하세요"
-                  />
-                </div>
               </div>
 
               <div className="flex justify-end gap-3 mt-6">
@@ -787,6 +777,18 @@ const ContactsPage = () => {
           connectionId={selectedHistoryConnection.id}
         />
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmDialog
+        isOpen={showDeleteDialog}
+        onClose={() => {
+          setShowDeleteDialog(false);
+          setDeletingContact(null);
+        }}
+        onConfirm={confirmDelete}
+        contactName={deletingContact?.name || ''}
+        isDeleting={isDeleting}
+      />
 
       <ToastContainer toasts={toasts} onRemoveToast={removeToast} />
     </div>

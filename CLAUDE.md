@@ -55,6 +55,27 @@ Both methods are handled by `lib/auth.ts` with middleware-based route protection
 - Tenant-scoped data access patterns
 - Current tenant context via `/api/user/current-tenant`
 
+#### **CRITICAL: Tenant ID Retrieval Pattern**
+**ALWAYS use `users.current_tenant_id` for getting user's tenant ID, NOT JWT token values.**
+
+```typescript
+// ✅ CORRECT - Always query database for current tenant
+const userTenantResult = await query(
+  `SELECT current_tenant_id FROM users WHERE id = $1`,
+  [userId]
+);
+const tenantId = userTenantResult.rows[0].current_tenant_id;
+
+// ❌ WRONG - Don't rely on JWT token tenantId
+const tenantId = user.tenantId; // This can be outdated or null
+```
+
+**Why this is critical:**
+- JWT tokens may have outdated `tenantId` values
+- Users can switch tenants, updating `users.current_tenant_id` 
+- Direct database query ensures accurate, real-time tenant association
+- Prevents data isolation issues and sync problems
+
 ### API Patterns
 - RESTful design with consistent error handling
 - Swagger documentation with JSDoc comments

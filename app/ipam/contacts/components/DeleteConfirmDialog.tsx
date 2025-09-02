@@ -7,7 +7,7 @@ interface DeleteConfirmDialogProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => Promise<void>;
-  deviceName: string;
+  contactName: string;
   isDeleting?: boolean;
 }
 
@@ -15,7 +15,7 @@ export default function DeleteConfirmDialog({
   isOpen,
   onClose,
   onConfirm,
-  deviceName,
+  contactName,
   isDeleting = false
 }: DeleteConfirmDialogProps) {
   // ESC 키 이벤트 리스너
@@ -47,7 +47,7 @@ export default function DeleteConfirmDialog({
               <AlertTriangle className="w-5 h-5 text-red-600" />
             </div>
             <h2 className="text-xl font-semibold text-gray-800">
-              디바이스 삭제
+              담당자 삭제
             </h2>
           </div>
           <button
@@ -62,11 +62,11 @@ export default function DeleteConfirmDialog({
         {/* 내용 */}
         <div className="p-6 space-y-4">
           <p className="text-gray-700">
-            정말로 다음 디바이스를 삭제하시겠습니까?
+            정말로 다음 담당자를 삭제하시겠습니까?
           </p>
           
           <div className="bg-gray-50 p-4 rounded-lg border-l-4 border-red-500">
-            <div className="font-medium text-gray-900">{deviceName}</div>
+            <div className="font-medium text-gray-900">{contactName}</div>
             <div className="text-sm text-gray-600 mt-1">
               이 작업은 되돌릴 수 없습니다.
             </div>
@@ -78,9 +78,9 @@ export default function DeleteConfirmDialog({
               <div className="text-sm text-yellow-800">
                 <div className="font-medium mb-1">주의사항:</div>
                 <ul className="list-disc list-inside space-y-1 text-yellow-700">
-                  <li>할당된 IP 주소가 있는 경우 먼저 해제해야 합니다.</li>
-                  <li>삭제된 디바이스는 복구할 수 없습니다.</li>
-                  <li>관련된 모든 설정 정보가 함께 삭제됩니다.</li>
+                  <li>해당 담당자에게 할당된 디바이스 관리 권한이 해제됩니다.</li>
+                  <li>삭제된 담당자 정보는 복구할 수 없습니다.</li>
+                  <li>관련된 모든 연결 정보가 함께 삭제됩니다.</li>
                 </ul>
               </div>
             </div>

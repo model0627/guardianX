@@ -58,6 +58,24 @@ export async function POST(request: NextRequest) {
 
     const apiConnection = connectionResult.rows[0];
 
+    // Get user's current tenant ID from database (CRITICAL: Always use users.current_tenant_id)
+    const userTenantResult = await query(
+      `SELECT current_tenant_id FROM users WHERE id = $1`,
+      [userId]
+    );
+
+    if (userTenantResult.rows.length === 0 || !userTenantResult.rows[0].current_tenant_id) {
+      return NextResponse.json({ error: 'User tenant not found' }, { status: 400 });
+    }
+
+    const tenantId = userTenantResult.rows[0].current_tenant_id;
+    
+    console.log('[LibrariesSync] Using tenant_id from users.current_tenant_id:', {
+      userId,
+      tenantId,
+      apiConnectionTenantId: apiConnection.tenant_id
+    });
+
     // Create sync history record
     const executionType = systemUser === 'auto-sync' ? 'auto' : 'manual';
     const syncHistoryResult = await query(
@@ -159,7 +177,7 @@ export async function POST(request: NextRequest) {
         `SELECT id, name, status, deleted_at, deletion_reason, api_connection_id
          FROM libraries 
          WHERE tenant_id = $1 AND (api_connection_id = $2 OR api_connection_id IS NULL)`,
-        [apiConnection.tenant_id, apiConnectionId]
+        [tenantId, apiConnectionId]
       );
       
       const existingLibraries = new Map(
@@ -321,7 +339,7 @@ export async function POST(request: NextRequest) {
         } else {
           // Insert new library - only include fields that have mappings, use defaults for others
           const insertFields = ['name', 'status', 'tenant_id', 'created_by', 'api_connection_id'];
-          const insertValues = [mappedData.name, 'active', apiConnection.tenant_id, userId, apiConnectionId];
+          const insertValues = [mappedData.name, 'active', tenantId, userId, apiConnectionId];
           const placeholders = ['$1', '$2', '$3', '$4', '$5'];
           let paramIndex = 6;
 

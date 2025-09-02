@@ -58,8 +58,23 @@ export async function POST(request: NextRequest) {
 
     const apiConnection = connectionResult.rows[0];
 
-    // Get tenant_id from the API connection
-    const tenantId = apiConnection.tenant_id;
+    // Get user's current tenant ID from database (CRITICAL: Always use users.current_tenant_id)
+    const userTenantResult = await query(
+      `SELECT current_tenant_id FROM users WHERE id = $1`,
+      [userId]
+    );
+
+    if (userTenantResult.rows.length === 0 || !userTenantResult.rows[0].current_tenant_id) {
+      return NextResponse.json({ error: 'User tenant not found' }, { status: 400 });
+    }
+
+    const tenantId = userTenantResult.rows[0].current_tenant_id;
+    
+    console.log('[ContactsSync] Using tenant_id from users.current_tenant_id:', {
+      userId,
+      tenantId,
+      apiConnectionTenantId: apiConnection.tenant_id
+    });
 
     // Create sync history record
     const executionType = systemUser === 'auto-sync' ? 'auto' : 'manual';

@@ -70,14 +70,19 @@ export async function POST(request: NextRequest) {
     // 시스템 자동 동기화인 경우
     const systemUser = request.headers.get('X-System-User');
     let userId = null;
+    let user: any = null;
     
     if (systemUser === 'auto-sync') {
       // 시스템 사용자 ID 사용
       const systemUserResult = await query(
-        `SELECT id FROM users WHERE email = 'admin@guardianx.com' LIMIT 1`
+        `SELECT id, current_tenant_id FROM users WHERE email = 'admin@guardianx.com' LIMIT 1`
       );
       if (systemUserResult.rows.length > 0) {
         userId = systemUserResult.rows[0].id;
+        user = { 
+          userId: systemUserResult.rows[0].id,
+          tenantId: systemUserResult.rows[0].current_tenant_id
+        };
       }
     } else {
       // 일반 사용자 인증
@@ -86,16 +91,38 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
       }
 
-      const user = await verifyToken(token);
+      user = await verifyToken(token);
       if (!user) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
       }
       userId = user.userId;
     }
 
-    if (!userId) {
+    if (!userId || !user) {
       return NextResponse.json({ error: 'User not found' }, { status: 401 });
     }
+
+    // Get user's current tenant ID from database
+    const userTenantResult = await query(
+      `SELECT current_tenant_id FROM users WHERE id = $1`,
+      [userId]
+    );
+
+    if (userTenantResult.rows.length === 0 || !userTenantResult.rows[0].current_tenant_id) {
+      return NextResponse.json({ error: 'User tenant not found' }, { status: 400 });
+    }
+
+    const actualTenantId = userTenantResult.rows[0].current_tenant_id;
+    
+    console.log('[Sync] User context:', {
+      userId,
+      userTenantIdFromAuth: user.tenantId,
+      actualTenantId,
+      userObject: user
+    });
+
+    // Override user tenantId with the actual tenant ID from database
+    user.tenantId = actualTenantId;
 
     const { apiConnectionId, isAutoSync } = await request.json();
 
@@ -107,6 +134,23 @@ export async function POST(request: NextRequest) {
     }
 
     // Get API connection details
+    console.log('Looking for API connection:', { apiConnectionId, tenantId: user.tenantId });
+    
+    // First check without tenant_id to see if connection exists
+    const checkResult = await query(
+      `SELECT id, name, tenant_id FROM api_connections WHERE id = $1`,
+      [apiConnectionId]
+    );
+    
+    if (checkResult.rows.length > 0) {
+      console.log('API connection found:', {
+        id: checkResult.rows[0].id,
+        name: checkResult.rows[0].name,
+        tenant_id: checkResult.rows[0].tenant_id,
+        user_tenant_id: user.tenantId
+      });
+    }
+    
     const connectionResult = await query(
       `SELECT * FROM api_connections WHERE id = $1 AND is_active = true`,
       [apiConnectionId]
@@ -120,6 +164,25 @@ export async function POST(request: NextRequest) {
     }
 
     const apiConnection = connectionResult.rows[0];
+    
+    // If API connection doesn't have tenant_id, update it
+    if (!apiConnection.tenant_id) {
+      console.log('Updating API connection with tenant_id:', user.tenantId);
+      await query(
+        `UPDATE api_connections SET tenant_id = $1 WHERE id = $2`,
+        [user.tenantId, apiConnectionId]
+      );
+      apiConnection.tenant_id = user.tenantId;
+    }
+
+    // Also update any existing devices without tenant_id to ensure they're visible
+    await query(
+      `UPDATE devices 
+       SET tenant_id = $1 
+       WHERE tenant_id IS NULL AND is_active = true`,
+      [user.tenantId]
+    );
+    console.log('Updated any existing devices without tenant_id to use tenant_id:', user.tenantId);
 
     // Create sync history record
     const executionType = systemUser === 'auto-sync' ? 'auto' : 'manual';
@@ -180,10 +243,10 @@ export async function POST(request: NextRequest) {
 
       // Get existing devices by name to check for updates (not for deactivation)
       const existingDevicesResult = await query(
-        `SELECT id, name, status, is_active 
+        `SELECT id, name, status, is_active, tenant_id 
          FROM devices 
-         WHERE is_active = true`,
-        []
+         WHERE is_active = true AND tenant_id = $1`,
+        [user.tenantId]
       );
       
       const existingDevices = new Map(
@@ -262,10 +325,11 @@ export async function POST(request: NextRequest) {
             updateValues.push(mappedData.description || '');
           }
 
-          // Add the device ID as the final parameter
+          // Add the device ID and tenant_id as the final parameters
           updateValues.push(existingDevice.id);
+          updateValues.push(user.tenantId);
 
-          const updateQuery = `UPDATE devices SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`;
+          const updateQuery = `UPDATE devices SET ${updateFields.join(', ')} WHERE id = $${paramIndex} AND tenant_id = $${paramIndex + 1}`;
           
           await query(updateQuery, updateValues);
           
@@ -277,10 +341,18 @@ export async function POST(request: NextRequest) {
           }
         } else {
           // Insert new device - only include fields that have mappings, use defaults for others
-          const insertFields = ['name', 'status', 'created_by'];
-          const insertValues = [mappedData.name, 'active', userId];
-          const placeholders = ['$1', '$2', '$3'];
-          let paramIndex = 4;
+          const insertFields = ['name', 'status', 'created_by', 'tenant_id', 'is_active'];
+          const insertValues = [mappedData.name, 'active', userId, user.tenantId, true];
+          const placeholders = ['$1', '$2', '$3', '$4', '$5'];
+          let paramIndex = 6;
+          
+          console.log('[Sync] Device INSERT preparation:', {
+            tenantId: user.tenantId,
+            userId: userId,
+            deviceName: mappedData.name,
+            insertFields,
+            insertValues
+          });
 
           // Only include fields that have mappings in the API response and exist in DB
           if (mappedData.hasOwnProperty('device_type')) {
@@ -315,6 +387,12 @@ export async function POST(request: NextRequest) {
           }
 
           const insertQuery = `INSERT INTO devices (${insertFields.join(', ')}) VALUES (${placeholders.join(', ')})`;
+          
+          console.log('[Sync] About to execute INSERT:', { 
+            query: insertQuery, 
+            values: insertValues,
+            fields: insertFields
+          });
           
           await query(insertQuery, insertValues);
           recordsAdded++;
