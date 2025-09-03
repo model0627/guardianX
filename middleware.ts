@@ -15,7 +15,9 @@ const protectedPaths = [
   '/api/profile',
   '/api/assessment-items',
   '/api/assessment-checklists',
-  '/api/asset-assessments'
+  '/api/asset-assessments',
+  '/api/proxy',
+  '/api/api-connections'
 ];
 
 // 관리자만 접근 가능한 경로들
@@ -82,6 +84,13 @@ export async function middleware(request: NextRequest) {
   // 현재 사용자 정보 가져오기 (Edge Runtime 호환)
   const user = await verifyJWTSimple(request);
   const isAuthenticated = !!user;
+  
+  // Debug logging for proxy requests
+  if (pathname.startsWith('/api/proxy')) {
+    console.log(`[Middleware] Proxy request to ${pathname}`);
+    console.log(`[Middleware] Authentication: ${isAuthenticated ? 'Success' : 'Failed'}`);
+    console.log(`[Middleware] User: ${user?.email || 'None'}`);
+  }
 
   // 1. 인증이 필요한 경로 체크
   const needsAuth = protectedPaths.some(path => pathname.startsWith(path));

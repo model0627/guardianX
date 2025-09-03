@@ -138,6 +138,27 @@ export async function POST(request: NextRequest) {
     });
 
     try {
+      // 토큰이 만료되었는지 확인하고 갱신 시도
+      const now = new Date();
+      const expiryDate = googleAccount.token_expires_at ? new Date(googleAccount.token_expires_at) : null;
+      
+      if (expiryDate && now >= expiryDate) {
+        console.log('[GoogleSheets] Token expired, attempting to refresh...');
+        try {
+          await oauth2Client.refreshAccessToken();
+        } catch (refreshError) {
+          console.error('[GoogleSheets] Token refresh failed:', refreshError);
+          return NextResponse.json(
+            { 
+              error: 'Google 인증이 만료되었습니다. 다시 로그인해주세요.',
+              code: 'GOOGLE_AUTH_EXPIRED',
+              requireReauth: true
+            },
+            { status: 401 }
+          );
+        }
+      }
+
       // Google Sheets API 클라이언트 생성
       const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
 
@@ -224,6 +245,82 @@ export async function POST(request: NextRequest) {
 
     } catch (sheetsError: any) {
       console.error('Google Sheets API error:', sheetsError);
+      
+      // invalid_grant 오류 처리
+      if (sheetsError.message?.includes('invalid_grant') || sheetsError.error === 'invalid_grant') {
+        console.log('[GoogleSheets] Invalid grant error, attempting token refresh...');
+        try {
+          await oauth2Client.refreshAccessToken();
+          console.log('[GoogleSheets] Token refreshed successfully, retrying API call...');
+          
+          // 토큰 갱신 후 재시도
+          const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+          const spreadsheetResponse = await sheets.spreadsheets.get({
+            spreadsheetId,
+            includeGridData: false
+          });
+
+          const spreadsheetInfo = {
+            title: spreadsheetResponse.data.properties?.title || 'Unknown',
+            sheetCount: spreadsheetResponse.data.sheets?.length || 0,
+            sheets: spreadsheetResponse.data.sheets?.map(sheet => ({
+              title: sheet.properties?.title,
+              sheetId: sheet.properties?.sheetId
+            })) || []
+          };
+
+          const targetSheetName = sheetName || (spreadsheetInfo.sheets[0]?.title as string) || 'Sheet1';
+          const rangeNotation = `${targetSheetName}!${range}`;
+
+          const valuesResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: rangeNotation,
+            valueRenderOption: 'UNFORMATTED_VALUE',
+            dateTimeRenderOption: 'FORMATTED_STRING'
+          });
+
+          const rows = valuesResponse.data.values || [];
+          const headers = rows[0];
+          const dataRows = rows.slice(1);
+
+          const data = dataRows.map(row => {
+            const obj: Record<string, any> = {};
+            headers.forEach((header, index) => {
+              if (header && typeof header === 'string') {
+                obj[header.trim()] = row[index] !== undefined ? row[index] : '';
+              }
+            });
+            return obj;
+          });
+
+          return NextResponse.json({
+            success: true,
+            data,
+            spreadsheetInfo: {
+              ...spreadsheetInfo,
+              usedSheetName: targetSheetName
+            },
+            message: `"${targetSheetName}" 시트에서 ${data.length}개의 레코드를 성공적으로 가져왔습니다.`
+          });
+
+        } catch (retryError) {
+          console.error('[GoogleSheets] Retry after token refresh failed:', retryError);
+          
+          // 토큰이 완전히 무효한 경우 Google 계정 연결 삭제
+          await query(
+            'DELETE FROM google_accounts WHERE user_id = $1',
+            [user.userId]
+          );
+          
+          return NextResponse.json(
+            { 
+              error: 'Google 인증이 완전히 만료되었습니다. Google 계정을 다시 연결해주세요.',
+              requireReauth: true
+            },
+            { status: 401 }
+          );
+        }
+      }
       
       if (sheetsError.code === 403) {
         return NextResponse.json(

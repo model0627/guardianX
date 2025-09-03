@@ -46,11 +46,21 @@ export default function ContactFieldMappingModal({
     setLoading(true);
     try {
       // Fetch API data through proxy
+      // 토큰 가져오기 (쿠키에서)
+      const token = document.cookie.split('; ').find(row => row.startsWith('token='))?.split('=')[1];
+      
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      
+      // 토큰이 있으면 Authorization 헤더에 추가
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
       const response = await fetch('/api/proxy/fetch-api', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         credentials: 'include',
         body: JSON.stringify({ url: apiUrl }),
       });

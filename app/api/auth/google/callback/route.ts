@@ -95,19 +95,21 @@ export async function POST(request: NextRequest) {
       );
 
       if (existingAccountResult.rows.length > 0) {
-        // 기존 계정 업데이트
+        // 기존 계정 업데이트 - user_id도 현재 사용자로 업데이트
         await query(
           `UPDATE google_accounts 
-           SET access_token = $1, 
-               refresh_token = $2, 
-               token_expires_at = $3,
-               email = $4,
-               name = $5,
-               picture_url = $6,
-               scope = $7,
+           SET user_id = $1,
+               access_token = $2, 
+               refresh_token = $3, 
+               token_expires_at = $4,
+               email = $5,
+               name = $6,
+               picture_url = $7,
+               scope = $8,
                updated_at = CURRENT_TIMESTAMP
-           WHERE user_id = $8`,
+           WHERE user_id = $1 OR google_user_id = $9`,
           [
+            user.userId,
             tokens.access_token,
             tokens.refresh_token,
             tokens.expiry_date ? new Date(tokens.expiry_date) : null,
@@ -115,7 +117,7 @@ export async function POST(request: NextRequest) {
             googleUser.name,
             googleUser.picture,
             tokens.scope,
-            user.userId
+            googleUser.id
           ]
         );
       } else {

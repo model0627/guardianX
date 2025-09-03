@@ -55,27 +55,86 @@ export default function DeviceFieldMappingModal({ isOpen, onClose, apiConnection
 
   const fetchSampleData = async () => {
     try {
-      const response = await fetch('/api/proxy/fetch-api', {
-        method: 'POST',
-        headers: {
+      let response;
+      
+      // Check if this is a Google Sheets connection
+      if (apiConnection.api_url?.includes('docs.google.com/spreadsheets')) {
+        console.log('[DeviceFieldMapping] Detected Google Sheets URL, using Google Sheets API');
+        
+        // Extract spreadsheet ID from URL
+        const spreadsheetIdMatch = apiConnection.api_url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+        const spreadsheetId = spreadsheetIdMatch ? spreadsheetIdMatch[1] : null;
+        
+        if (spreadsheetId) {
+          // Use Google Sheets private API (with OAuth)
+          response = await fetch('/api/google-sheets/private', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+              spreadsheetId: spreadsheetId,
+              sheetName: '', // Will use first sheet
+              range: 'A:Z'
+            }),
+          });
+        } else {
+          throw new Error('Invalid Google Sheets URL');
+        }
+      } else {
+        // Regular REST API
+        console.log('[DeviceFieldMapping] Using regular proxy API for:', apiConnection.api_url);
+        
+        const token = document.cookie.split('; ').find(row => row.startsWith('token='))?.split('=')[1];
+        
+        const headers: Record<string, string> = {
           'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ url: apiConnection.api_url }),
-      });
+        };
+        
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        
+        response = await fetch('/api/proxy/fetch-api', {
+          method: 'POST',
+          headers,
+          credentials: 'include',
+          body: JSON.stringify({ url: apiConnection.api_url }),
+        });
+      }
 
       if (response.ok) {
-        const data = await response.json();
+        const result = await response.json();
+        
+        // Handle Google Sheets response structure
+        const data = result.data || result;
         setSampleData(data);
         
         // Extract field names from the sample data
         if (Array.isArray(data) && data.length > 0) {
           const fields = Object.keys(data[0]);
           setApiFields(fields);
+          console.log('[DeviceFieldMapping] Extracted fields:', fields);
+        } else {
+          console.log('[DeviceFieldMapping] No data or empty array received');
+          setApiFields(['데이터가 없습니다']);
         }
+      } else if (response.status === 401) {
+        console.error('Authentication failed - please refresh the page and try again');
+        setApiFields(['인증 오류: 페이지를 새로고침해주세요']);
+      } else if (response.status === 502) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('External API error:', errorData);
+        setApiFields([`외부 API 오류: ${errorData.details || errorData.error || 'API가 응답하지 않습니다'}`]);
+      } else {
+        console.error(`API call failed: ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        setApiFields([`오류: ${errorData.error || 'API 호출 실패'}`]);
       }
     } catch (error) {
       console.error('Failed to fetch sample data:', error);
+      setApiFields(['네트워크 오류: API에 연결할 수 없습니다']);
     }
   };
 

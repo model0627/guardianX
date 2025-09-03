@@ -662,22 +662,22 @@ export default function LibraryPage() {
                   버전
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  제조사
+                  벤더
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  디바이스
+                  제품 타입
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  라이선스
+                  디바이스명
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  보안 상태
+                  설치 경로
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  리소스 사용량
+                  라이선스 타입
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  마지막 업데이트
+                  취약점 상태
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   상태
@@ -718,49 +718,41 @@ export default function LibraryPage() {
                       {library.vendor || '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      <div className="space-y-1">
-                        {library.device_name && (
-                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                            🖥️ {library.device_name}
-                          </span>
-                        )}
-                        {library.linkedDevices && library.linkedDevices.length > 0 ? (
-                          <div className="flex flex-wrap gap-1">
-                            {library.linkedDevices.slice(0, 2).map((device, index) => (
-                              <span key={index} className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                🔗 {typeof device === 'string' ? device : device.name || 'Unknown'}
-                              </span>
-                            ))}
-                            {library.linkedDevices.length > 2 && (
-                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                                +{library.linkedDevices.length - 2}
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          !library.device_name && <span className="text-gray-400">미연결</span>
-                        )}
+                      <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
+                        library.product_type === 'software' ? 'bg-blue-100 text-blue-800' :
+                        library.product_type === 'hardware' ? 'bg-green-100 text-green-800' :
+                        'bg-gray-100 text-gray-800'
+                      }`}>
+                        {library.product_type || 'software'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {library.device_name ? (
+                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          🖥️ {library.device_name}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">미할당</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      <div className="max-w-xs truncate" title={library.install_path || ''}>
+                        {library.install_path || '-'}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      <div>
-                        {library.license_type && (
-                          <div className="text-xs">
-                            <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
-                              library.license_type === 'commercial' ? 'bg-orange-100 text-orange-800' :
-                              library.license_type === 'open_source' ? 'bg-green-100 text-green-800' :
-                              'bg-gray-100 text-gray-800'
-                            }`}>
-                              {library.license_type}
-                            </span>
-                          </div>
-                        )}
-                        {library.license_expiry && (
-                          <div className="text-xs text-gray-500 mt-1">
-                            만료: {new Date(library.license_expiry).toLocaleDateString('ko-KR')}
-                          </div>
-                        )}
-                      </div>
+                      {library.license_type ? (
+                        <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
+                          library.license_type === 'commercial' ? 'bg-orange-100 text-orange-800' :
+                          library.license_type === 'open_source' ? 'bg-green-100 text-green-800' :
+                          library.license_type === 'freeware' ? 'bg-blue-100 text-blue-800' :
+                          'bg-gray-100 text-gray-800'
+                        }`}>
+                          {library.license_type}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">-</span>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <div className="flex items-center space-x-2">
@@ -781,31 +773,6 @@ export default function LibraryPage() {
                           </div>
                         )}
                       </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      <div className="space-y-1">
-                        {library.cpu_usage && (
-                          <div className="flex items-center text-xs">
-                            <span className="w-8">CPU:</span>
-                            <span className="font-mono">{library.cpu_usage}%</span>
-                          </div>
-                        )}
-                        {library.memory_usage && (
-                          <div className="flex items-center text-xs">
-                            <span className="w-8">RAM:</span>
-                            <span className="font-mono">{(library.memory_usage / 1024 / 1024).toFixed(1)}MB</span>
-                          </div>
-                        )}
-                        {library.disk_usage && (
-                          <div className="flex items-center text-xs">
-                            <span className="w-8">DISK:</span>
-                            <span className="font-mono">{(library.disk_usage / 1024 / 1024).toFixed(1)}MB</span>
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {library.last_update ? new Date(library.last_update).toLocaleDateString('ko-KR') : '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${

@@ -2,6 +2,102 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/database';
 import { getTokenFromRequest, verifyToken } from '@/lib/auth';
 
+/**
+ * @swagger
+ * /api/sync/libraries:
+ *   post:
+ *     summary: 라이브러리 데이터 동기화
+ *     description: 외부 API 연결을 통해 라이브러리 데이터를 동기화합니다. 시스템 자동 동기화 또는 수동 동기화를 지원합니다.
+ *     tags: [Sync]
+ *     security:
+ *       - bearerAuth: []
+ *       - apiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - apiConnectionId
+ *             properties:
+ *               apiConnectionId:
+ *                 type: string
+ *                 format: uuid
+ *                 description: API 연결 ID
+ *               isAutoSync:
+ *                 type: boolean
+ *                 description: 자동 동기화 여부
+ *                 default: false
+ *     responses:
+ *       200:
+ *         description: 동기화 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: 라이브러리 동기화가 완료되었습니다.
+ *                 stats:
+ *                   type: object
+ *                   properties:
+ *                     recordsProcessed:
+ *                       type: integer
+ *                       description: 처리된 레코드 수
+ *                     recordsAdded:
+ *                       type: integer
+ *                       description: 추가된 레코드 수
+ *                     recordsUpdated:
+ *                       type: integer
+ *                       description: 업데이트된 레코드 수
+ *                     recordsDeactivated:
+ *                       type: integer
+ *                       description: 비활성화된 레코드 수
+ *                     recordsSkipped:
+ *                       type: integer
+ *                       description: 건너뛴 레코드 수
+ *                 warnings:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                   description: 경고 메시지 목록
+ *       400:
+ *         description: 잘못된 요청
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: 인증 실패
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: API 연결을 찾을 수 없음
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: 서버 오류
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: 동기화 중 오류가 발생했습니다.
+ *                 details:
+ *                   type: string
+ *                   description: 오류 상세 정보
+ */
 export async function POST(request: NextRequest) {
   try {
     // 시스템 자동 동기화인 경우
@@ -113,15 +209,24 @@ export async function POST(request: NextRequest) {
             throw new Error('Google Sheets ID가 설정되지 않았습니다.');
           }
           
-          // 내부 API 호출이므로 쿠키를 통해 인증 정보 전달
-          const cookieHeader = request.headers.get('cookie') || '';
+          // Forward authentication headers
+          const authToken = getTokenFromRequest(request);
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+          };
           
-          sheetsResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/google-sheets/private`, {
+          if (authToken) {
+            headers['Authorization'] = `Bearer ${authToken}`;
+          }
+          
+          const cookieHeader = request.headers.get('cookie');
+          if (cookieHeader) {
+            headers['Cookie'] = cookieHeader;
+          }
+          
+          sheetsResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3003'}/api/google-sheets/private`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Cookie': cookieHeader, // 쿠키를 통해 사용자 인증 정보 전달
-            },
+            headers,
             body: JSON.stringify({
               spreadsheetId: spreadsheetId,
               sheetName: apiConnection.sheet_name || '',

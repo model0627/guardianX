@@ -3,14 +3,24 @@ import { getTokenFromRequest, verifyToken } from '@/lib/auth';
 
 export async function POST(request: NextRequest) {
   try {
+    // Get token from request (supports both Authorization header and cookie)
     const token = getTokenFromRequest(request);
+    
+    console.log('[Proxy API] Token found:', token ? 'Yes' : 'No');
+    
     if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      console.log('[Proxy API] No token found in request');
+      return NextResponse.json({ error: 'Unauthorized - No token' }, { status: 401 });
     }
 
+    // Verify the JWT token
     const user = await verifyToken(token);
+    
+    console.log('[Proxy API] Token verification:', user ? `Success - ${user.email}` : 'Failed');
+    
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      console.log('[Proxy API] Token verification failed');
+      return NextResponse.json({ error: 'Unauthorized - Invalid token' }, { status: 401 });
     }
 
     const { url } = await request.json();
@@ -23,6 +33,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch data from external API
+    console.log('[Proxy API] Fetching external URL:', url);
+    
     try {
       const response = await fetch(url, {
         headers: {
@@ -31,14 +43,29 @@ export async function POST(request: NextRequest) {
         }
       });
 
+      console.log('[Proxy API] External API response status:', response.status);
+
       if (!response.ok) {
+        const errorText = await response.text().catch(() => 'No error details');
+        console.log('[Proxy API] External API error:', errorText);
+        
+        // Don't return 401 from external API as our own 401
+        // Return 502 (Bad Gateway) for external API errors
+        if (response.status === 401) {
+          return NextResponse.json(
+            { error: 'External API authentication failed', details: errorText },
+            { status: 502 }
+          );
+        }
+        
         return NextResponse.json(
-          { error: `External API error: ${response.status}` },
-          { status: response.status }
+          { error: `External API error: ${response.status}`, details: errorText },
+          { status: 502 }
         );
       }
 
       const data = await response.json();
+      console.log('[Proxy API] Successfully fetched data from external API');
       return NextResponse.json(data);
 
     } catch (fetchError) {

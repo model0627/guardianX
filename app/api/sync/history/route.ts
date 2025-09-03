@@ -2,6 +2,108 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/database';
 import { getTokenFromRequest, verifyToken } from '@/lib/auth';
 
+/**
+ * @swagger
+ * /api/sync/history:
+ *   get:
+ *     summary: 동기화 히스토리 조회
+ *     description: API 연결의 동기화 실행 기록을 조회합니다.
+ *     tags: [Sync]
+ *     security:
+ *       - bearerAuth: []
+ *       - apiKeyAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: connectionId
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: 특정 API 연결의 히스토리만 조회
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *         description: 조회할 레코드 수
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           default: 0
+ *         description: 건너뛸 레코드 수
+ *     responses:
+ *       200:
+ *         description: 동기화 히스토리 조회 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 history:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                         format: uuid
+ *                       api_connection_id:
+ *                         type: string
+ *                         format: uuid
+ *                       connection_name:
+ *                         type: string
+ *                       api_url:
+ *                         type: string
+ *                       status:
+ *                         type: string
+ *                         enum: [running, completed, failed]
+ *                       execution_type:
+ *                         type: string
+ *                         enum: [manual, auto]
+ *                       sync_started_at:
+ *                         type: string
+ *                         format: date-time
+ *                       sync_completed_at:
+ *                         type: string
+ *                         format: date-time
+ *                       records_processed:
+ *                         type: integer
+ *                       records_added:
+ *                         type: integer
+ *                       records_updated:
+ *                         type: integer
+ *                       records_deactivated:
+ *                         type: integer
+ *                       error_message:
+ *                         type: string
+ *                       initiated_by_email:
+ *                         type: string
+ *                       initiated_by_name:
+ *                         type: string
+ *                 pagination:
+ *                   type: object
+ *                   properties:
+ *                     total:
+ *                       type: integer
+ *                     limit:
+ *                       type: integer
+ *                     offset:
+ *                       type: integer
+ *                     hasMore:
+ *                       type: boolean
+ *       401:
+ *         description: 인증 실패
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: 서버 오류
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 export async function GET(request: NextRequest) {
   try {
     const token = getTokenFromRequest(request);

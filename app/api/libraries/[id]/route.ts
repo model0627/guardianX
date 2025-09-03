@@ -2,6 +2,63 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/database';
 import { getTokenFromRequest, verifyToken } from '@/lib/auth';
 
+/**
+ * @swagger
+ * /api/libraries/{id}:
+ *   delete:
+ *     summary: 라이브러리 삭제
+ *     description: 특정 라이브러리를 소프트 삭제합니다.
+ *     tags: [Libraries]
+ *     security:
+ *       - bearerAuth: []
+ *       - apiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: 라이브러리 ID
+ *     responses:
+ *       200:
+ *         description: 라이브러리 삭제 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: 라이브러리가 삭제되었습니다.
+ *       400:
+ *         description: 잘못된 요청 (잘못된 ID 형식, 이미 삭제됨 등)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: 인증 실패
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: 라이브러리를 찾을 수 없음
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: 서버 오류
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 export async function DELETE(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }

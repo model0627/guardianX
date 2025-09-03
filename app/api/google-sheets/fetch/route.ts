@@ -2,8 +2,88 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/lib/auth';
 
 /**
- * Google Sheets 데이터 가져오기 API
- * 공개된 스프레드시트나 API 키를 통해 데이터를 가져옴
+ * @swagger
+ * /api/google-sheets/fetch:
+ *   post:
+ *     summary: Google Sheets 데이터 가져오기
+ *     description: 공개된 Google Sheets 스프레드시트에서 데이터를 가져옵니다. 스프레드시트는 "링크가 있는 모든 사용자"에게 공유되어 있어야 합니다.
+ *     tags: [Google Sheets]
+ *     security:
+ *       - bearerAuth: []
+ *       - apiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - spreadsheetUrl
+ *             properties:
+ *               spreadsheetUrl:
+ *                 type: string
+ *                 description: Google Sheets URL
+ *                 example: https://docs.google.com/spreadsheets/d/1ABC123/edit
+ *               sheetName:
+ *                 type: string
+ *                 description: 시트 이름
+ *                 default: Sheet1
+ *               range:
+ *                 type: string
+ *                 description: 데이터 범위
+ *                 default: A:Z
+ *     responses:
+ *       200:
+ *         description: 데이터 가져오기 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                   description: 스프레드시트 데이터
+ *                 spreadsheetId:
+ *                   type: string
+ *                   description: 스프레드시트 ID
+ *                 method:
+ *                   type: string
+ *                   enum: [csv, api]
+ *                   description: 데이터 가져오기 방법
+ *       400:
+ *         description: 잘못된 요청 (URL 누락 또는 형식 오류)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: 인증 실패
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: 스프레드시트 접근 권한 없음
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                 details:
+ *                   type: string
+ *       500:
+ *         description: 서버 오류
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  */
 export async function POST(request: NextRequest) {
   try {

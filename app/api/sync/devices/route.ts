@@ -200,22 +200,84 @@ export async function POST(request: NextRequest) {
       
       // Check connection type and fetch data accordingly
       if (apiConnection.connection_type === 'google_sheets') {
-        // Fetch data from Google Sheets
-        const sheetsResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/google-sheets/fetch`, {
-          method: 'POST',
-          headers: {
+        console.log('[Sync] Fetching Google Sheets data for connection:', apiConnection.name);
+        
+        // Check if this connection has OAuth authentication
+        const sheetsInfoResult = await query(
+          `SELECT auth_type, spreadsheet_id, google_account_id
+           FROM google_sheets_connections
+           WHERE api_connection_id = $1`,
+          [apiConnectionId]
+        );
+        
+        let sheetsResponse;
+        
+        if (sheetsInfoResult.rows.length > 0 && sheetsInfoResult.rows[0].auth_type === 'oauth') {
+          // Use private API for OAuth authenticated sheets
+          const spreadsheetId = sheetsInfoResult.rows[0].spreadsheet_id || 
+                               apiConnection.api_url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/)?.[1];
+          
+          console.log('[Sync] Using Google Sheets private API with OAuth for spreadsheet:', spreadsheetId);
+          
+          // Get the user's Google account token
+          const googleAccountResult = await query(
+            `SELECT access_token, refresh_token, token_expires_at
+             FROM google_accounts
+             WHERE user_id = $1`,
+            [userId]
+          );
+          
+          if (googleAccountResult.rows.length === 0) {
+            throw new Error('Google 계정이 연결되지 않았습니다. 먼저 Google 계정을 연결해주세요.');
+          }
+          
+          // Forward the original request headers for authentication
+          const authToken = getTokenFromRequest(request);
+          const headers: Record<string, string> = {
             'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            spreadsheetUrl: apiConnection.api_url,
-            sheetName: apiConnection.sheet_name || 'Sheet1',
-            range: apiConnection.range_notation || 'A:Z'
-          }),
-        });
+          };
+          
+          // Include authentication
+          if (authToken) {
+            headers['Authorization'] = `Bearer ${authToken}`;
+          }
+          
+          // Forward cookies
+          const cookies = request.headers.get('cookie');
+          if (cookies) {
+            headers['Cookie'] = cookies;
+          }
+          
+          sheetsResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3003'}/api/google-sheets/private`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              spreadsheetId: spreadsheetId,
+              sheetName: apiConnection.sheet_name || '',
+              range: apiConnection.range_notation || 'A:Z'
+            }),
+          });
+        } else {
+          // Use public API for public sheets
+          console.log('[Sync] Using Google Sheets public API for URL:', apiConnection.api_url);
+          
+          sheetsResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/google-sheets/fetch`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              spreadsheetUrl: apiConnection.api_url,
+              sheetName: apiConnection.sheet_name || 'Sheet1',
+              range: apiConnection.range_notation || 'A:Z'
+            }),
+          });
+        }
         
         if (!sheetsResponse.ok) {
           const error = await sheetsResponse.json();
-          throw new Error(`Google Sheets fetch failed: ${error.details || error.error}`);
+          console.error('[Sync] Google Sheets fetch error:', error);
+          throw new Error(`Google Sheets fetch failed: ${error.details || error.error || '인증이 필요합니다.'}`);
         }
         
         const sheetsData = await sheetsResponse.json();

@@ -2,6 +2,86 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/database';
 import { getTokenFromRequest, verifyToken } from '@/lib/auth';
 
+/**
+ * @swagger
+ * /api/api-connections/{id}:
+ *   get:
+ *     summary: API 연결 상세 조회
+ *     description: 특정 API 연결의 상세 정보를 조회합니다.
+ *     tags: [API Connections]
+ *     security:
+ *       - bearerAuth: []
+ *       - apiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: API 연결 ID
+ *     responses:
+ *       200:
+ *         description: API 연결 정보 조회 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 id:
+ *                   type: string
+ *                   format: uuid
+ *                 name:
+ *                   type: string
+ *                 api_url:
+ *                   type: string
+ *                 connection_type:
+ *                   type: string
+ *                   enum: [api, google_sheets]
+ *                 sync_target:
+ *                   type: string
+ *                   enum: [libraries, contacts]
+ *                 auto_sync_enabled:
+ *                   type: boolean
+ *                 sync_frequency_minutes:
+ *                   type: integer
+ *                 sync_frequency_type:
+ *                   type: string
+ *                   enum: [manual, hourly, daily, weekly, monthly]
+ *                 field_mappings:
+ *                   type: object
+ *                 last_sync:
+ *                   type: string
+ *                   format: date-time
+ *                 last_sync_status:
+ *                   type: string
+ *                 last_sync_message:
+ *                   type: string
+ *                 created_at:
+ *                   type: string
+ *                   format: date-time
+ *                 updated_at:
+ *                   type: string
+ *                   format: date-time
+ *       401:
+ *         description: 인증 실패
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: API 연결을 찾을 수 없거나 접근 권한 없음
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: 서버 오류
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -55,6 +135,94 @@ export async function GET(
   }
 }
 
+/**
+ * @swagger
+ * /api/api-connections/{id}:
+ *   put:
+ *     summary: API 연결 정보 수정
+ *     description: API 연결의 설정을 수정합니다.
+ *     tags: [API Connections]
+ *     security:
+ *       - bearerAuth: []
+ *       - apiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: API 연결 ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: 연결 이름
+ *               api_url:
+ *                 type: string
+ *                 description: API URL 또는 Google Sheets URL
+ *               connection_type:
+ *                 type: string
+ *                 enum: [api, google_sheets]
+ *                 description: 연결 유형
+ *               sync_target:
+ *                 type: string
+ *                 enum: [libraries, contacts]
+ *                 description: 동기화 대상
+ *               auto_sync_enabled:
+ *                 type: boolean
+ *                 description: 자동 동기화 활성화 여부
+ *               field_mappings:
+ *                 type: object
+ *                 description: 필드 매핑 설정
+ *               sync_frequency_minutes:
+ *                 type: integer
+ *                 description: 동기화 주기 (분)
+ *               sync_frequency_type:
+ *                 type: string
+ *                 enum: [manual, hourly, daily, weekly, monthly]
+ *                 description: 동기화 주기 유형
+ *     responses:
+ *       200:
+ *         description: API 연결 수정 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: API 연결이 업데이트되었습니다.
+ *                 data:
+ *                   type: object
+ *                   description: 업데이트된 API 연결 정보
+ *       401:
+ *         description: 인증 실패
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: API 연결을 찾을 수 없거나 접근 권한 없음
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: 서버 오류
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -162,6 +330,57 @@ export async function PUT(
   }
 }
 
+/**
+ * @swagger
+ * /api/api-connections/{id}:
+ *   delete:
+ *     summary: API 연결 삭제
+ *     description: API 연결을 소프트 삭제합니다 (비활성화).
+ *     tags: [API Connections]
+ *     security:
+ *       - bearerAuth: []
+ *       - apiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: API 연결 ID
+ *     responses:
+ *       200:
+ *         description: API 연결 삭제 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: API 연결이 삭제되었습니다.
+ *       401:
+ *         description: 인증 실패
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: API 연결을 찾을 수 없거나 접근 권한 없음
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: 서버 오류
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }

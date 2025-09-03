@@ -66,6 +66,12 @@ export default function AddApiConnectionPage() {
         const data = await response.json();
         setGoogleAccountConnected(data.connected);
         setGoogleAccount(data.googleAccount);
+        
+        // 토큰이 만료된 경우 자동으로 재인증 유도
+        if (data.connected && data.googleAccount?.token_expired) {
+          addToast('warning', 'Google 인증이 만료되었습니다. 다시 연결해주세요.');
+          setGoogleAccountConnected(false); // 연결되지 않은 상태로 처리
+        }
       }
     } catch (error) {
       console.error('Error checking Google account status:', error);
@@ -225,7 +231,17 @@ export default function AddApiConnectionPage() {
             addToast('success', `비공개 Google Sheets 연결 성공! "${data.spreadsheetInfo?.title}" - ${data.data?.length || 0}개의 행을 발견했습니다.`);
           } else {
             const error = await response.json();
-            addToast('error', error.details || 'Google Sheets 연결 테스트에 실패했습니다.');
+            
+            // Google 인증 만료 감지
+            if (error.code === 'GOOGLE_AUTH_EXPIRED' || error.requireReauth) {
+              addToast('warning', '⚠️ Google 인증이 만료되었습니다. 다시 로그인해주세요.');
+              setGoogleAccountConnected(false);
+              setGoogleAccount(null);
+              // 만료된 토큰 삭제
+              await fetch('/api/auth/google/status', { method: 'DELETE', credentials: 'include' });
+            } else {
+              addToast('error', error.details || error.error || 'Google Sheets 연결 테스트에 실패했습니다.');
+            }
           }
         } catch (error) {
           console.error('Error testing private Google Sheets connection:', error);
